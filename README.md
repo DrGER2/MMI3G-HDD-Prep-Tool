@@ -3,7 +3,7 @@ QNX shell script to prepare a HDD/SDD device for MMI3GP.
 
 QNX shell script mkmmi3gphdd prepares a new/unpartioned HDD/SDD for use in a Harman-Becker MMI3GP system.
 
-Ussage:
+Usage:
 
 Copy the script to a QNX 6.5 VM running in VMware Player.  chmod +x mkmmi3gphdd
 
