@@ -1,0 +1,141 @@
+#!/bin/ksh
+
+# 20230618 DrGER; Prepare a HDD/SDD for MMI3GP
+
+case "$#" in
+0)  echo "Usage: mkmmi3ghdd UMASSNR"
+    exit 1
+    ;;
+esac
+
+devnr=$1
+xumass=/dev/umass$devnr
+
+if [ ! -b "$xumass" ]
+then
+  echo "Cannot find device $xumass !"
+  exit 1
+fi
+
+if [ "$(fdisk $xumass query -s1)" != "0" ]
+then
+  echo "Found partition 1 defined.  Use fdisk $xumass delete -a !"
+  exit 1
+fi
+
+# Get total number of logical cylinders of HDD:
+xct="$(fdisk $xumass query -T)"
+
+xct80=9729 # 80 GB Hitachi
+xct60=7296 # 60 GB Toshiba
+
+if [ "$xct" -ge "$xct80" ]
+then
+  xc1=6023 # EU nav
+elif [ "$xct" -ge "$xct60" ]
+then
+  xc1=3590 # US nav
+else
+  echo "Disk capacity too small for MMI3GP (${xct}) !"
+  exit 1
+fi
+
+# Fixed partition sizes for MMI3GP
+xc3=133 # sss
+xc41=653 # gracenode
+xc42=21 # mmebackup1
+xc43=22 # persistence
+xc44=260 # img-cache
+xc45=130 # pv-cache
+xc4=$(($xc41 + $xc42 + $xc43 + $xc44 + $xc45)) # extended size
+
+# Mediadisk partition gets what is left:
+xc2=$(($xct - $xc1 - $xc3 - $xc4))
+
+echo "Part I: Making required partitions:"
+# Partition 1 (nav):
+echo "  making partition nav ..."
+xcs=0
+xce="$(($xcs + $xc1 - 1))"
+fdisk $xumass add -s1 -t77 -b -c${xcs},${xce}
+sync; sync; sync; sleep 1
+
+# Partition 2 (mediadisk):
+echo "  making partition mediadisk ..."
+xcs=$(($xce + 1))
+xce=$(($xcs + $xc2 - 1))
+fdisk $xumass add -s2 -t78 -c${xcs},${xce}
+sync; sync; sync; sleep 1
+
+# Partition 3 (sss):
+echo "  making partition sss ..."
+xcs=$(($xce + 1))
+xce=$(($xcs + $xc3 - 1))
+fdisk $xumass add -s3 -t79 -c${xcs},${xce}
+sync; sync; sync; sleep 1
+
+# Extended Partition 4:
+echo "  making partition extended ..."
+xcs=$(($xce + 1))
+xce=$(($xcs + $xc4 - 1))
+fdisk $xumass add -s4 -t5 -c${xcs},${xce}
+sync; sync; sync; sleep 1
+
+# Add required extended partitions:
+echo "  making extended partition gracenode ..."
+fdisk $xumass add -s4 -e1 -t187 -n${xc41}
+sync; sync; sync; sleep 1
+echo "  making extended partition mmebackup1 ..."
+fdisk $xumass add -s4 -e2 -t187 -n${xc42}
+sync; sync; sync; sleep 1
+echo "  making extended partition peristence ..."
+fdisk $xumass add -s4 -e3 -t187 -n${xc43}
+sync; sync; sync; sleep 1
+echo "  making extended partition img-cache ..."
+fdisk $xumass add -s4 -e4 -t187 -n${xc44}
+sync; sync; sync; sleep 1
+echo "  making extended partition pv-cache ..."
+fdisk $xumass add -s4 -e5 -t187 -n${xc45}
+sync; sync; sync; sleep 1
+
+# Show and enumerate the new partitions:
+fdisk $xumass show
+mount -e $xumass
+
+# Make MMI3GP QNX6 Filesystems:
+echo "Part II: Making QNX6 filesystems on ${xumass}:"
+
+echo "  making filesystem nav ..."
+mkqnx6fs -q ${xumass}t77
+chkqnx6fs -v ${xumass}t77
+
+echo "  making filesystem mediadisk ..."
+mkqnx6fs -q -T media ${xumass}t78
+chkqnx6fs -v ${xumass}t78
+
+echo "  making filesystem sss ..."
+mkqnx6fs -q ${xumass}t79 # sss
+chkqnx6fs -v ${xumass}t79
+
+echo "  making filesystem gracenode ..."
+mkqnx6fs -q ${xumass}t187
+chkqnx6fs -v ${xumass}t187
+
+echo "  making filesystem mmebackup1 ..."
+mkqnx6fs -q ${xumass}t187.1
+chkqnx6fs -v ${xumass}t187.1
+
+echo "  making filesystem persistence ..."
+mkqnx6fs -q ${xumass}t187.2
+chkqnx6fs -v ${xumass}t187.2
+
+echo "  making filesystem img-cache ..."
+mkqnx6fs -q ${xumass}t187.3
+chkqnx6fs -v ${xumass}t187.3
+
+echo "  making filesystem pv-cache ..."
+mkqnx6fs -q ${xumass}t187.4
+chkqnx6fs -v ${xumass}t187.4
+
+echo "Done !"
+exit 0
