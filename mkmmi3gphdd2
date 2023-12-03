@@ -1,0 +1,173 @@
+#!/bin/ksh
+
+# 20230902 DrGER; Added NAVCYLS to command line for 60 GB drives
+# 20230618 DrGER; Prepare a HDD/SDD for MMI3GP, requires min QNX 6.5.0.SP1
+
+prog="$(basename $0)"
+case "$#" in
+0)  echo "Usage: $prog UMASSNR [NAVCYLS]"
+    exit 1
+    ;;
+esac
+
+devnr=$1
+xumass=/dev/umass$devnr
+
+# Test for attached UMASS block device
+if [ ! -b "$xumass" ]
+then
+  echo "${prog}: Cannot find device $xumass !"
+  exit 1
+fi
+
+# Test for existing HDD partition table
+if [ "$(fdisk $xumass query -s1)" != 0 ]
+then
+  echo "${prog}: Found partition 1 defined.  Use fdisk $xumass delete -a !"
+  exit 1
+fi
+
+# Get total number of logical cylinders of HDD:
+xct="$(fdisk $xumass query -T)"
+
+# Determine whether 60 or 80+ GB HDD defs
+xct80=9729 # 80 GB Hitachi
+xct60=7296 # 60 GB Toshiba
+xnav80=6023 # ECE nav partition
+xnav60=3590 # NAR nav partition
+if [ "$xct" -ge "$xct80" ]
+then
+  xhdd=80
+elif [ "$xct" -ge "$xct60" ]
+then
+  xhdd=60
+else
+  echo "${prog}: Disk capacity too small for MMI3GP (${xct}) !"
+  exit 1
+fi
+
+# Check NAVCYLS and set, if found, for 60 GB, only
+if [ "${#}" -eq 2 ]
+then
+  xnavcyl="$2"
+  if [ "$xhdd" = 80 ]
+  then
+    echo "NAV partition size ignored for 80+ HDD ..."
+  elif [ "$xhdd" = "60" ] && [ "$xnavcyl" -lt "$xnav60" ]
+  then
+    echo "${prog}: NAV partition too small for 60 GB HDD !"
+    exit 1
+  else
+    xnav60="$xnavcyl"
+  fi
+fi
+case "$xhdd" in
+"60") xc1="$xnav60" ;;
+"80") xc1="$xnav80" ;;
+esac
+echo "Using NAVCYLS = $xc1 ..."
+
+# Fixed partition sizes for MMI3GP
+xc3=133 # sss
+xc41=653 # gracenode
+xc42=21 # mmebackup1
+xc43=22 # persistence
+xc44=260 # img-cache
+xc45=130 # pv-cache
+xc4=$(($xc41 + $xc42 + $xc43 + $xc44 + $xc45)) # extended size
+
+# Mediadisk partition gets what is left (min 1000 cyls):
+xc2=$(($xct - $xc1 - $xc3 - $xc4))
+if [ "$xc2" -lt 1000 ]
+then
+  echo "${prog}: MEDIADISK partition too small (${xc2}) !"
+  exit 1
+fi
+
+echo; echo "Part I: Making required partitions:"
+# Partition 1 (nav):
+echo "  making partition nav ..."
+xcs=0
+xce="$(($xcs + $xc1 - 1))"
+fdisk $xumass add -s1 -t77 -b -c${xcs},${xce}
+sync; sync; sync; sleep 1
+
+# Partition 2 (mediadisk):
+echo "  making partition mediadisk ..."
+xcs=$(($xce + 1))
+xce=$(($xcs + $xc2 - 1))
+fdisk $xumass add -s2 -t78 -c${xcs},${xce}
+sync; sync; sync; sleep 1
+
+# Partition 3 (sss):
+echo "  making partition sss ..."
+xcs=$(($xce + 1))
+xce=$(($xcs + $xc3 - 1))
+fdisk $xumass add -s3 -t79 -c${xcs},${xce}
+sync; sync; sync; sleep 1
+
+# Extended Partition 4:
+echo "  making partition extended ..."
+xcs=$(($xce + 1))
+xce=$(($xcs + $xc4 - 1))
+fdisk $xumass add -s4 -t5 -c${xcs},${xce}
+sync; sync; sync; sleep 1
+
+# Add required extended partitions:
+echo "  making extended partition gracenode ..."
+fdisk $xumass add -s4 -e1 -t187 -n${xc41}
+sync; sync; sync; sleep 1
+echo "  making extended partition mmebackup1 ..."
+fdisk $xumass add -s4 -e2 -t187 -n${xc42}
+sync; sync; sync; sleep 1
+echo "  making extended partition peristence ..."
+fdisk $xumass add -s4 -e3 -t187 -n${xc43}
+sync; sync; sync; sleep 1
+echo "  making extended partition img-cache ..."
+fdisk $xumass add -s4 -e4 -t187 -n${xc44}
+sync; sync; sync; sleep 1
+echo "  making extended partition pv-cache ..."
+fdisk $xumass add -s4 -e5 -t187 -n${xc45}
+sync; sync; sync; sleep 1
+
+# Show and enumerate the new partitions:
+fdisk $xumass show
+mount -e $xumass
+
+# Make MMI3GP QNX6 Filesystems:
+echo; echo "Part II: Making QNX6 filesystems on ${xumass}:"
+
+echo "  making filesystem nav ..."
+mkqnx6fs -q ${xumass}t77
+chkqnx6fs -v ${xumass}t77
+
+echo "  making filesystem mediadisk ..."
+mkqnx6fs -q -T media ${xumass}t78
+chkqnx6fs -v ${xumass}t78
+
+echo "  making filesystem sss ..."
+mkqnx6fs -q ${xumass}t79 # sss
+chkqnx6fs -v ${xumass}t79
+
+echo "  making filesystem gracenode ..."
+mkqnx6fs -q ${xumass}t187
+chkqnx6fs -v ${xumass}t187
+
+echo "  making filesystem mmebackup1 ..."
+mkqnx6fs -q ${xumass}t187.1
+chkqnx6fs -v ${xumass}t187.1
+
+echo "  making filesystem persistence ..."
+mkqnx6fs -q ${xumass}t187.2
+chkqnx6fs -v ${xumass}t187.2
+
+echo "  making filesystem img-cache ..."
+mkqnx6fs -q ${xumass}t187.3
+chkqnx6fs -v ${xumass}t187.3
+
+echo "  making filesystem pv-cache ..."
+mkqnx6fs -q ${xumass}t187.4
+chkqnx6fs -v ${xumass}t187.4
+
+echo; echo "Done !"
+exit 0
